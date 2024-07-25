@@ -27,6 +27,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.security.NoSuchAlgorithmException;
 import java.util.HashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * This is {@link EncodingUtils} that encapsulates common base64, signing and encryption calls and operations in one spot.
@@ -429,19 +435,27 @@ public class EncodingUtils {
      * @return the decrypted value
      */
     @SneakyThrows
-    public static String decryptJwtValue(final Key secretKeyEncryptionKey, final String value) {
-        val jwe = new JsonWebEncryption();
-        jwe.setKey(secretKeyEncryptionKey);
-        jwe.setCompactSerialization(value);
-        LOGGER.trace("Decrypting value...");
-        try {
-            return jwe.getPayload();
-        } catch (final JoseException e) {
-            if (LOGGER.isTraceEnabled()) {
-                throw new DecryptionException(e);
+    public static String decryptJwtValue(final Key secretKeyEncryptionKey, final String value) throws Exception {
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<String> future = executor.submit(() -> {
+            JsonWebEncryption jwe = new JsonWebEncryption();
+            jwe.setKey(secretKeyEncryptionKey);
+            jwe.setCompactSerialization(value);
+            try {
+                return jwe.getPayload();
+            } catch (JoseException e) {
+                throw new Exception("Decryption failed.", e);
             }
-            //noinspection ThrowInsideCatchBlockWhichIgnoresCaughtException
-            throw new DecryptionException(); //NOPMD
+        });
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new Exception("Decryption timed out.", e);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new Exception("Decryption encountered an error.", e);
+        } finally {
+            executor.shutdown();
         }
     }
 
